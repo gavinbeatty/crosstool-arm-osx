@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 #  Author: Rick Boykin
 #
@@ -16,9 +16,6 @@
 #  I abandoned in favor of crosstool-ng
 #
 #  The process:
-#      Install HomeBrew and packages: gnu-sed binutils gawk automake libtool bash and grep
-#      Homebrew is installed in $GrewHome so as not to interfere with macports or fink
-#
 #      Create case sensitive volume using hdiutil and mount it to /Volumes/$ImageName
 #
 #      Download, patch and build crosstool-ng
@@ -28,129 +25,94 @@
 #  License:
 #      Please feel free to use this in any way you see fit.
 #
-set -e -u
+set -e
+set -u
+
+say() { printf "%s\n" "$*" ; }
+abspath() {
+    case "$1" in
+    /*) say "$*" ;;
+    *) say "$(pwd)/$*" ;;
+    esac
+}
 
 #
-# Config. Update here to suite your specific needs. I've
+# Config. Update here to suit your specific needs.
 #
-InstallBase=`pwd`
-BrewHome=/brew2/local
-BrewTools="gnu-sed binutils gawk automake libtool bash"
-BrewToolsExtra="https://raw.github.com/Homebrew/homebrew-dupes/master/grep.rb"
+InstallBase="$(abspath "$(dirname "$0")")"
+GnuRoot="${GnuRoot:-/opt/local}"
 ImageName=CrossTool2NG
-ImageNameExt=${ImageName}.sparseimage
-CrossToolVersion=crosstool-ng-1.17.0
+ImageNameExt="${ImageName}.sparseimage"
+CrossToolVersion=crosstool-ng-1.18.0
 ToolChainName=arm-unknown-linux-gnueabi
+ToolChainNameConfig="$InstallBase/arm-unknown-linux-gnueabi.config"
 
-#
-# If $BrewHome does not alread contain HomeBrew, download and install it. 
-# Install the required HomeBrew packages.
-#
-function buildBrewDepends()
-{
-    if [ ! -d "$BrewHome" ]
-    then
-      echo "If asked, enter your sudo password to create the $BrewHome folder"
-      sudo mkdir -p "$BrewHome"
-      sudo chown -R $USER "$BrewHome"
-      curl -Lsf http://github.com/mxcl/homebrew/tarball/master | tar xz --strip 1 -C$BrewHome
-    fi
-    echo "Updating HomeBrew tools..."
-    $BrewHome/bin/brew update
-    $BrewHome/bin/brew upgrade
-    set +e
-    $BrewHome/bin/brew install $BrewTools && true
-    $BrewHome/bin/brew install $BrewToolsExtra && true
-    set -e
+die() { say "$*" >&2 ; exit 1 ; }
+createCaseSensitiveVolume() {
+    diskutil umount "/Volumes/${ImageName}" || diskutil umount force "/Volumes/${ImageName}" || true
+    rm -f "$ImageNameExt" || true
+    hdiutil create "$ImageName" -volname "$ImageName" -type SPARSE -size 8g -fs HFSX
+    hdiutil mount "$ImageNameExt"
 }
 
-function createCaseSensitiveVolume()
-{
-    echo "Creating sparse volume mounted on /Volumes/${ImageName}..."
-    ImageNameExt=${ImageName}.sparseimage
-    diskutil umount force /Volumes/${ImageName} && true
-    rm -f ${ImageNameExt} && true
-    hdiutil create ${ImageName} -volname ${ImageName} -type SPARSE -size 8g -fs HFSX
-    hdiutil mount ${ImageNameExt}
-}
-
-function downloadCrossTool()
-{
-    cd /Volumes/$ImageName
-    echo "Downloading crosstool-ng..."
-    CrossToolArchive=${CrossToolVersion}.tar.bz2
-    CrossToolUrl=http://crosstool-ng.org/download/crosstool-ng/${CrossToolArchive}
-    curl -L -o ${CrossToolArchive} $CrossToolUrl
-    tar xvf $CrossToolArchive
-    #rm -f $CrossToolArchive
-}
-
-function patchCrosstool()
-{
-    cd /Volumes/$ImageName/$CrossToolVersion
-    echo "Patching crosstool-ng..."
+buildCrosstool() {
+	for i in /usr/bin/make \
+    "$GnuRoot/bin/gobjcopy" \
+	"$GnuRoot/bin/gobjdump" \
+	"$GnuRoot/bin/granlib" \
+	"$GnuRoot/bin/greadelf" \
+	"$GnuRoot/bin/glibtool" \
+	"$GnuRoot/bin/glibtoolize" \
+	"$GnuRoot/bin/gsed" \
+	"$GnuRoot/bin/gawk" \
+	"$GnuRoot/bin/automake" \
+	"$GnuRoot/bin/bash" \
+    ; do type "$i" >/dev/null 2>&1 || die "Please install ${i}." ; done
+    tar xjvf "~/Downloads/${CrossToolVersion}.tar.bz2" -C "/Volumes/$ImageName/"
+    (cd "/Volumes/$ImageName/$CrossToolVersion"
     sed -i .bak '6i\
 #include <stddef.h>' kconfig/zconf.y
-}
-
-function buildCrosstool()
-{
-    echo "Configuring crosstool-ng..."
+    wget -q -O /dev/null https://google.com || die "Either https://google.com is down, or you must set \`ca_directory = /path/to/certs\` in ~/.wgetrc"
     ./configure --enable-local \
-	--with-objcopy=$BrewHome/bin/gobjcopyi       \
-	--with-objdump=$BrewHome/bin/gobjdump        \
-	--with-ranlib=$BrewHome/bin/granlib          \
-	--with-readelf=$BrewHome/bin/greadelf        \
-	--with-libtool=$BrewHome/bin/glibtool        \
-	--with-libtoolize=$BrewHome/bin/glibtoolize  \
-	--with-sed=$BrewHome/bin/gsed                \
-	--with-awk=$BrewHome/bin/gawk                \
-	--with-automake=$BrewHome/bin/automake       \
-	--with-bash=$BrewHome/bin/bash               \
+    --build=x86_64-apple-darwin --host="$ToolChainName" \
+	--with-objcopy="$GnuRoot/bin/gobjcopy"             \
+	--with-objdump="$GnuRoot/bin/gobjdump"             \
+	--with-ranlib="$GnuRoot/bin/granlib"               \
+	--with-readelf="$GnuRoot/bin/greadelf"             \
+	--with-libtool="$GnuRoot/bin/glibtool"             \
+	--with-libtoolize="$GnuRoot/bin/glibtoolize"       \
+	--with-sed="$GnuRoot/bin/gsed"                     \
+	--with-awk="$GnuRoot/bin/gawk"                     \
+	--with-automake="$GnuRoot/bin/automake"            \
+	--with-bash="$GnuRoot/bin/bash"                    \
+    --with-make=/usr/bin/make                           \
 	CFLAGS="-std=c99 -Doffsetof=__builtin_offsetof"
-    make
+    # make-3.81 required. make-3.82 has problems with some glibc, eglibc versions.
+    /usr/bin/make EXTRA_LDFLAGS="/opt/local/lib/libintl.a /opt/local/lib/libiconv.a -framework CoreFoundation"
+    )
 }
 
-function createToolchain()
-{
-    echo "Creating ARM toolchain $ToolChainName..."
-    cd /Volumes/$ImageName
-    mkdir $ToolChainName
-    cd $ToolChainName
-
-    # the process seems to opena a lot of files at once. The default is 256. Bump it to 1024.
+createToolchain() {
+    mkdir "/Volumes/$ImageName/$ToolChainName"
+    # the process seems to open a a lot of files at once. The default is 256. Bump it to 1024.
     ulimit -n 1024
-
-    echo "Selecting arm-unknown-linux-gnueabi toolchain..."
-    PATH=$BrewHome/bin:$PATH ../${CrossToolVersion}/ct-ng $ToolChainName
-
-    echo "Cleaning toolchain..."
-    PATH=$BrewHome/bin:$PATH ../${CrossToolVersion}/ct-ng clean
-
-    echo "Copying my working toolchain configuration"
-    cp $InstallBase/${ToolChainName}.config ./.config
-
-    echo "Manually Configuring toolchain"
-    echo "        Select 'Force unwind support'"
-    echo "        Unselect 'Link libstdc++ statically onto the gcc binary'"
-    echo "        Unselect 'Debugging -> dmalloc or fix its build'"
-
-    # Use 'menuconfig' target for the fine tuning.
-    PATH=$BrewHome/bin:$PATH ../${CrossToolVersion}/ct-ng menuconfig
+    # Downloaded archives go here.
+    mkdir "$HOME/src" 2>/dev/null || true
+    (cd "/Volumes/$ImageName/$ToolChainName"
+    PATH="$GnuRoot/bin:$PATH" "../${CrossToolVersion}/ct-ng" "$ToolChainName"
+    PATH="$GnuRoot/bin:$PATH" "../${CrossToolVersion}/ct-ng" clean
+    cp "$InstallBase/${ToolChainName}.config" ./.config
+    PATH="$GnuRoot/bin:$PATH" "../${CrossToolVersion}/ct-ng" menuconfig
+    )
 }
 
-function buildToolchain()
-{
-    cd /Volumes/$ImageName/$ToolChainName
-    echo "Building toolchain..."
-    PATH=$BrewHome/bin:$PATH ../${CrossToolVersion}/ct-ng build.4
-    echo "And if all went well, you are done! Go forth and compile."
+buildToolchain() {
+    cd "/Volumes/$ImageName/$ToolChainName"
+    PATH="$GnuRoot/bin:$PATH" "../${CrossToolVersion}/ct-ng" build.4
 }
 
-buildBrewDepends
+set -x
 createCaseSensitiveVolume
-downloadCrossTool
-patchCrosstool
 buildCrosstool
 createToolchain
 buildToolchain
